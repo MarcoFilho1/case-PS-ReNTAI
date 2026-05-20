@@ -1,4 +1,16 @@
 # case-PS-ReNTAI
+
+Plataforma de teleconsultorias médicas que conecta profissionais de saúde a especialistas remotos, cobrindo o ciclo completo: solicitação, validação inteligente de documentos via IA, emissão de pareceres e acompanhamento em tempo real.
+
+## 1. Arquitetura da Solução e Stack
+O sistema foi arquitetado para ser moderno, assíncrono e tipado de ponta a ponta. 
+
+* **Backend:** FastAPI + Python. Escolhido pelo suporte nativo a operações assíncronas que é essencial para chamadas de IA, WebSockets e geração automática de documentação OpenAPI.
+* **Banco de Dados:** PostgreSQL.
+* **Frontend:** React + Vite + TypeScript.
+* **Infraestrutura:** Containerização com Docker.
+
+---
 Para garantir rastreabilidade das decisões de design e documentar trade-offs, este projeto utiliza Architecture Decision.
 Você pode conferir os detalhes na pasta /docs/adrs:
 * [Escolha do framework backend](docs/adr/001-escolha-do-framework-backend.md)
