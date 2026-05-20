@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: telemed_db
+    restart: always
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=secretpassword
+      - POSTGRES_DB=telemed
+    ports:
+      - "5423:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d telemed"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  
+  backend:
+    build:
+      context: ./backend
+    container_name: telemed_backend
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://admin:secretpassword@db:5432/telemed
+      - JWT_SECRET=${JWT_SECRET}
+      - AI_VALIDATION_THRESHOLD=${AI_VALIDATION_THRESHOLD}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db: 
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - uploads_data:/app/uploads
+    
+  frontend:
+    build:
+      context: ./frontend
+    container_name: telemed_frontend
+    restart: always
+    ports:
+      - "3000:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    
+volumes:
+  postgres_data:
+  uploads_data:
