@@ -29,6 +29,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://admin:secretpassword@db:5432/telemed
       - JWT_SECRET=${JWT_SECRET}
       - AI_VALIDATION_THRESHOLD=${AI_VALIDATION_THRESHOLD}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
     ports:
       - "8000:8000"
     depends_on:
