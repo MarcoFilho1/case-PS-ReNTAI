@@ -15,7 +15,7 @@ Para garantir rastreabilidade das decisões de design e documentar trade-offs, e
 Você pode conferir os detalhes na pasta /docs/adrs:
 * [Escolha do framework backend](docs/adr/001-escolha-do-framework-backend.md)
 * [Escolha do sistema de autenticação](docs/adr/002-autenticacao.md)
-* [Escolha da arquitetura](docs/adr/003-arquitetura.md)/
+* [Escolha da arquitetura](docs/adr/003-arquitetura.md)
 
 ---
 
