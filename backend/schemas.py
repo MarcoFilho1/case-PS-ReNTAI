@@ -1,7 +1,7 @@
 from models import TeleconsultationStatus
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
-from models import UserRole, Specialty, TeleconsultoriaonStatus
+from models import UserRole, Specialty, TeleconsultationStatus
 from datetime import date, datetime
 from typing import Optional
 
