@@ -1,15 +1,18 @@
+from models import TeleconsultationStatus
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
-from models import UserRole
+from models import UserRole, Specialty, TeleconsultoriaonStatus
+from datetime import date, datetime
+from typing import Optional
 
-# Contrato pra criaÁ„o de usu·rio
+# Contrato pra cria√ß√£o de usu√°rio
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
     role: UserRole
 
-# Contrato pra exibiÁ„o de usu·rio
+# Contrato pra exibi√ß√£o de usu√°rio
 class UserOut(BaseModel):
     id: UUID
     name: str
@@ -23,3 +26,21 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+class TeleconsultationOut(BaseModel):
+    id: UUID
+    patient_name: str
+    specialty: Specialty
+    status: TeleconsultationStatus
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class TeleconsultationDetailOut(TeleconsultationOut):
+    patient_dob: date
+    diagnostic_hypothesis: str
+    clinical_history: str
+    ai_confidence_score: Optional[float]
+    requester_id: UUID
+    specialist_id: Optional[UUID]
