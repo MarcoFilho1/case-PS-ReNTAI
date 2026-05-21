@@ -5,7 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 
 // Função simples para proteger a rota do Dashboard
 function PrivateRoute({ children }: { children: JSX.Element }) {
-  const isAuthenticated = !!localStorage.getItem('token');
+  const isAuthenticated = !!sessionStorage.getItem('token');
   return isAuthenticated ? children : <Navigate to="/login" />;
 }
 

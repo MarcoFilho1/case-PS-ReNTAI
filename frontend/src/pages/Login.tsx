@@ -20,7 +20,7 @@ export function Login() {
 
       const response = await api.post('/login', formData);
       
-      localStorage.setItem('token', response.data.access_token);
+      sessionStorage.setItem('token', response.data.access_token);
       
       navigate('/dashboard');
     } catch (err: any) {

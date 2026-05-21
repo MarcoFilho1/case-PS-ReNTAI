@@ -5,7 +5,7 @@ import { api } from '../api';
 export function Register() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
-    name: '', email: '', password: '', role: 'SOLICITANTE'
+    name: '', email: '', password: '', role: 'SOLICITANTE', specialty: ''
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,7 +16,11 @@ export function Register() {
     setLoading(true);
     setError('');
     try {
-      await api.post('/register', formData);
+      const payload = {
+        ...formData,
+        specialty: formData.role === 'ESPECIALISTA' ? formData.specialty : undefined
+      };
+      await api.post('/register', payload);
       setSuccess(true);
       setTimeout(() => {
         navigate('/login');
@@ -117,9 +121,9 @@ export function Register() {
               <select 
                 id="role"
                 className="w-full px-4 py-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none text-zinc-800"
-                onChange={e => setFormData({...formData, role: e.target.value})}
+                onChange={e => setFormData({...formData, role: e.target.value, specialty: e.target.value === 'ESPECIALISTA' ? '' : ''})}
                 disabled={loading || success}
-                defaultValue="SOLICITANTE"
+                value={formData.role}
               >
                 <option value="SOLICITANTE">Médico Solicitante (Local)</option>
                 <option value="ESPECIALISTA">Médico Especialista (Remoto)</option>
@@ -131,6 +135,36 @@ export function Register() {
               </div>
             </div>
           </div>
+
+          {formData.role === 'ESPECIALISTA' && (
+            <div className="animate-fadeIn">
+              <label htmlFor="specialty" className="block text-xs font-semibold text-zinc-400 mb-1.5 uppercase tracking-wider">
+                Especialidade Médica
+              </label>
+              <div className="relative">
+                <select 
+                  id="specialty"
+                  required
+                  className="w-full px-4 py-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none text-zinc-800"
+                  value={formData.specialty}
+                  onChange={e => setFormData({...formData, specialty: e.target.value})}
+                  disabled={loading || success}
+                >
+                  <option value="">Selecione uma especialidade</option>
+                  <option value="CARDIOLOGIA">Cardiologia</option>
+                  <option value="CIRURGIA_ROBOTICA">Cirurgia Robótica</option>
+                  <option value="ODONTOLOGIA">Odontologia</option>
+                  <option value="DOENCAS_RARAS">Doenças Raras</option>
+                  <option value="OXIGENOTERAPIA">Oxigenoterapia</option>
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-4 pointer-events-none text-zinc-400">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          )}
 
           <button 
             type="submit" 
