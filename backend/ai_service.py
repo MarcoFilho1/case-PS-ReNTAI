@@ -55,22 +55,33 @@ def extract_text_with_ocr(file_content: bytes, filename: str) -> str:
         logger.error(f"Erro durante o OCR: {e}")
         return ""
 
-async def validate_document(file_content: bytes, filename: str) -> float:
+async def validate_document(
+    file_content: bytes, 
+    filename: str, 
+    specialty: str, 
+    diagnostic_hypothesis: str, 
+    clinical_history: str
+) -> tuple[float, str | None]:
     """
-    Consome a API da OpenRouter pra avaliar se realmente o arquivo enviado 
-    é um documento legítimo ou um documento qualquer
-    Caso o documento seja muito grande ele trunca em 3000 caracteres pra evitar estourar
-    o token da IA que é gratuita
+    Consome a API da OpenRouter para avaliar se o anexo clínico está
+    totalmente encaixado com o contexto médico (área médica + especialidade solicitada)
+    e retorna o score de confiança (0.0 a 1.0) e o motivo da rejeição (se houver).
     """
 
     if not OPENROUTER_API_KEY or not OPENROUTER_MODEL or not OPENROUTER_URL:
         logger.warning("Credenciais da OpenRouter não configuradas. Retornando 0.0 de confiança.")
-        return 0.0
+        return 0.0, "Credenciais do serviço de validação por IA não configuradas."
     
     sample_text = ""
     is_pdf = filename.lower().endswith(".pdf")
+    is_txt = filename.lower().endswith(".txt")
 
-    if is_pdf:
+    if is_txt:
+        try:
+            sample_text = file_content.decode("utf-8")
+        except Exception:
+            sample_text = file_content.decode("latin-1", errors="ignore")
+    elif is_pdf:
         sample_text = extract_text_from_pdf(file_content)
         if len(sample_text) < 50:
             logger.info(f"PDF sem texto nativo detectado: {filename}. Chamando o OCR")
@@ -86,23 +97,31 @@ async def validate_document(file_content: bytes, filename: str) -> float:
         sample_text = sample_text[:3000] + "\n\n[...TEXTO TRUNCADO POR LIMITE DE TAMANHO...]"
 
     system_prompt = (
-        "Você é um sistema de auditoria de segurança hospitalar especializado em telemedicina.\n"
-        "Sua tarefa é analisar os metadados e o conteúdo textual extraído de um arquivo (via PDF ou OCR) "
-        "para determinar se ele se parece com um documento legítimo de apoio clínico (ex: exames, laudos, "
-        "prontuários, receitas ou documentos de identidade do paciente).\n\n"
+        "Você é um sistema de auditoria médica avançado de telemedicina.\n"
+        "Sua tarefa é analisar o conteúdo textual e metadados de um documento clínico anexado a uma solicitação de teleconsultoria "
+        "e avaliar o quanto ele está alinhado com o contexto médico da solicitação (especialidade solicitada, hipótese diagnóstica e histórico clínico).\n\n"
+        "Critérios de avaliação:\n"
+        "- Quanto mais próximo de 0.00: O documento não tem relação alguma com a área médica ou com o contexto da especialidade e sintomas informados.\n"
+        "- Quanto mais próximo de 1.00: O documento está totalmente encaixado com o contexto médico e a especialidade solicitada.\n\n"
         "Regra estrita: Você deve responder APENAS com um objeto JSON válido, sem qualquer texto adicional antes ou depois. "
         "O formato do JSON deve ser exatamente:\n"
         "{\n"
-        '  "is_legitimate": boolean,\n'
-        '  "confidence_score": float\n'
+        '  "confidence_score": float,\n'
+        '  "rejection_reason": string or null\n'
         "}\n"
-        "Onde confidence_score é um valor decimal entre 0.00 e 1.00."
+        "Onde:\n"
+        "- confidence_score é um valor decimal entre 0.00 e 1.00.\n"
+        "- rejection_reason é uma justificativa em português explicando claramente o motivo do desalinhamento ou falha na adequação do documento (caso o score seja baixo, e.g., < 0.85). Se o documento for considerado totalmente legítimo e adequado, este campo deve ser null."
     )
 
-    user_prompt = f"""Nome do arquivo: {filename}
-                    Tamanho: {len(file_content)} bytes
-                    Conteúdo extraído:
-                    {sample_text}"""
+    user_prompt = f"""Especialidade Solicitada: {specialty}
+Hipótese Diagnóstica: {diagnostic_hypothesis}
+Histórico Clínico: {clinical_history}
+
+Nome do arquivo anexado: {filename}
+Tamanho do arquivo: {len(file_content)} bytes
+Conteúdo extraído do documento:
+{sample_text}"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -126,7 +145,7 @@ async def validate_document(file_content: bytes, filename: str) -> float:
             
             if response.status_code != 200:
                 logger.error(f"Erro na API OpenRouter: {response.status_code} - {response.text}")
-                return 0.80
+                return 0.80, "Falha de conexão com a API de inteligência artificial externa."
 
             response_data = response.json()
             content_str = response_data['choices'][0]['message']['content'].strip()
@@ -135,8 +154,18 @@ async def validate_document(file_content: bytes, filename: str) -> float:
                 content_str = content_str.strip("```json").strip("```").strip()
 
             result = json.loads(content_str)
-            return float(result.get("confidence_score", 0.50))
+            
+            try:
+                confidence_score = float(result.get("confidence_score", 0.50))
+            except (ValueError, TypeError):
+                confidence_score = 0.50
+
+            rejection_reason = result.get("rejection_reason")
+            if not rejection_reason or rejection_reason == "null":
+                rejection_reason = None
+
+            return confidence_score, rejection_reason
 
     except Exception as e:
         logger.error(f"Falha na validação de IA por exceção: {str(e)}")
-        return 0.0
+        return 0.0, f"Erro interno ao processar validação por IA: {str(e)}"
