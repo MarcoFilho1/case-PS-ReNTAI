@@ -31,6 +31,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(150), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(String(50))
+    specialty: Mapped[Specialty | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 class Teleconsultation(Base):
@@ -45,9 +46,13 @@ class Teleconsultation(Base):
     document_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[TeleconsultationStatus] = mapped_column(String(50), default=TeleconsultationStatus.PENDENTE)
     ai_confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ai_rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     specialist_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    
+    opinions: Mapped[list["Opinion"]] = relationship(cascade="all, delete-orphan")
+    status_history: Mapped[list["StatusHistory"]] = relationship(cascade="all, delete-orphan")
     
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
