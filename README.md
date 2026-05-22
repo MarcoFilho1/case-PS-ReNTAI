@@ -96,7 +96,7 @@ O projeto utiliza Docker para garantir que o ambiente seja replicável sem neces
    - **Frontend:** http://localhost:3000
    - **Backend/Swagger:** http://localhost:8000/docs
 
-## 3. Configuração do Serviço e Substituição do Modelo
+## 3. Configuração do Serviço de IA e Substituição do Modelo
 A validação de documentos utiliza uma abordagem híbrida (OCR + pypdf) combinada com a API do OpenRouter (LLM) por padrão. 
 
 * **Para configurar a LLM:** Edite as variáveis no arquivo `.env` localizado na raiz do projeto:
