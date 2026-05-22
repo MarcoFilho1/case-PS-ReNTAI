@@ -484,21 +484,11 @@ async def get_teleconsultation_pdf(
         def draw_header_footer(self, page_count):
             self.saveState()
             
-            # --- CABEÇALHO ---
-            lavid_path = "/app/assets/logo_lavid.jpg"
-            
-            rentai_path = "/app/assets/logo_rentai.png"
-            
+            lavid_path = "/app/assets/logo_lavid.png"
             
             if os.path.exists(lavid_path):
                 try:
-                    self.drawImage(ImageReader(lavid_path), 54, 760, width=90, height=45, preserveAspectRatio=True, anchor='nw')
-                except Exception:
-                    pass
-            
-            if os.path.exists(rentai_path):
-                try:
-                    self.drawImage(ImageReader(rentai_path), 450, 760, width=90, height=45, preserveAspectRatio=True, anchor='ne')
+                    self.drawImage(ImageReader(lavid_path), 54, 760, width=90, height=45, mask='auto', preserveAspectRatio=True, anchor='nw')
                 except Exception:
                     pass
 
@@ -509,12 +499,11 @@ async def get_teleconsultation_pdf(
             
             self.setFont("Helvetica-Bold", 14)
             self.setFillColor(colors.HexColor("#1E293B"))
-            self.drawCentredString(297.5, 770, "HOSPITAL RENTAI")
+            self.drawCentredString(297.5, 770, "RENTAI")
             self.setFont("Helvetica", 10)
             self.setFillColor(colors.HexColor("#475569"))
             self.drawCentredString(297.5, 755, "NÚCLEO DE TELEMEDICINA E TELESSAÚDE")
             
-            # --- RODAPÉ ---
             self.setStrokeColor(colors.HexColor("#CBD5E1"))
             self.setLineWidth(0.5)
             self.line(54, 50, 541, 50)
@@ -568,7 +557,6 @@ async def get_teleconsultation_pdf(
         }
         return mapping.get(spec, spec)
 
-    # --- QUADRO DE IDENTIFICAÇÃO DO PACIENTE (Estilo Médico Limpo) ---
     spec_str = format_specialty(tele.specialty.value if hasattr(tele.specialty, "value") else str(tele.specialty))
     
     patient_data = [
@@ -593,7 +581,6 @@ async def get_teleconsultation_pdf(
     story.append(t)
     story.append(Spacer(1, 15))
 
-    # --- DADOS CLÍNICOS ---
     story.append(Paragraph("1. INDICAÇÃO E HISTÓRICO CLÍNICO", h1_style))
     story.append(Paragraph(f"<b>Hipótese Diagnóstica Inicial:</b> {tele.diagnostic_hypothesis}", body_style))
     story.append(Spacer(1, 5))
@@ -602,7 +589,6 @@ async def get_teleconsultation_pdf(
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CBD5E1"), spaceBefore=10, spaceAfter=10))
 
-    # --- RESUMO DE TRIAGEM (IA) ---
     story.append(Paragraph("2. TRIAGEM DOCUMENTAL (INTELIGÊNCIA ARTIFICIAL)", h1_style))
     ai_text = tele.ai_summary if tele.ai_summary else "Análise de documento de apoio realizada com sucesso."
     story.append(Paragraph(ai_text.replace("\n", "<br/>"), body_style))
@@ -614,7 +600,6 @@ async def get_teleconsultation_pdf(
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CBD5E1"), spaceBefore=10, spaceAfter=10))
 
-    # --- PARECERES ---
     story.append(Paragraph("3. CONCLUSÃO E PARECER ESPECIALIZADO", h1_style))
     
     if tele.opinions:
@@ -623,7 +608,6 @@ async def get_teleconsultation_pdf(
             story.append(Paragraph(op.content.replace("\n", "<br/>"), body_style))
             story.append(Spacer(1, 15))
             
-            # Assinatura do médico especialista (Alinhada à direita)
             med_name = tele.specialist.name if tele.specialist else "Médico Especialista"
             signature = Paragraph(f"___________________________________________<br/><b>{med_name}</b><br/>CRM/Especialista Responsável<br/>Assinado em: {op_time}", 
                                   ParagraphStyle('Sig', parent=body_style, alignment=2, fontSize=9))

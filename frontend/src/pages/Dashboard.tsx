@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import logoRentai from '../assets/logo_rentai.png';
 
 interface Opinion {
   id: string;
@@ -100,6 +101,26 @@ const MOCK_DATA: Teleconsultation[] = [
   }
 ];
 
+const getDateSubtitleSuffix = (filterType: string) => {
+  switch (filterType) {
+    case 'TODAY':
+      return 'hoje';
+    case '3_DAYS':
+      return 'nos últimos 3 dias';
+    case '7_DAYS':
+      return 'nos últimos 7 dias';
+    case '15_DAYS':
+      return 'nos últimos 15 dias';
+    case '30_DAYS':
+      return 'nos últimos 30 dias';
+    case 'CUSTOM':
+      return 'no período personalizado';
+    case 'ALL':
+    default:
+      return 'na plataforma';
+  }
+};
+
 export function Dashboard() {
   const navigate = useNavigate();
   const [consultations, setConsultations] = useState<Teleconsultation[]>([]);
@@ -109,9 +130,12 @@ export function Dashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [specialtyFilter, setSpecialtyFilter] = useState('ALL');
-  const [dateFilterType, setDateFilterType] = useState('ALL');
+  const [dateFilterType, setDateFilterType] = useState('7_DAYS');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [isSortExpanded, setIsSortExpanded] = useState(false);
+  const sortTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -154,6 +178,28 @@ export function Dashboard() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
+
+  useEffect(() => {
+    return () => {
+      if (sortTimeoutRef.current) {
+        clearTimeout(sortTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleToggleSort = () => {
+    const newOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+    setSortOrder(newOrder);
+    setIsSortExpanded(true);
+
+    if (sortTimeoutRef.current) {
+      clearTimeout(sortTimeoutRef.current);
+    }
+
+    sortTimeoutRef.current = setTimeout(() => {
+      setIsSortExpanded(false);
+    }, 1200);
+  };
 
   const showToastRef = useRef<(message: string, type?: 'info' | 'success' | 'warning') => void>(() => {});
   showToastRef.current = (message, type = 'info') => {
@@ -933,11 +979,64 @@ export function Dashboard() {
     }
 
     return matchesSearch && matchesStatus && matchesSpecialty && matchesDate;
+  }).sort((a, b) => {
+    const dateA = new Date(a.created_at).getTime();
+    const dateB = new Date(b.created_at).getTime();
+    return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
   });
 
-  const totalCases = consultations.length;
-  const pendingCases = consultations.filter(c => c.status === 'EM_ANDAMENTO').length;
-  const completedCases = consultations.filter(c => c.status === 'CONCLUIDA').length;
+  const statsFilteredConsultations = consultations.filter(item => {
+    const patientName = item.patient_name || '';
+    const diagHypothesis = item.diagnostic_hypothesis || '';
+    const matchesSearch = patientName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          diagHypothesis.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSpecialty = specialtyFilter === 'ALL' || item.specialty === specialtyFilter;
+
+    let matchesDate = true;
+    if (dateFilterType !== 'ALL') {
+      const itemDate = new Date(item.created_at);
+      if (dateFilterType === 'TODAY') {
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        matchesDate = itemDate >= startOfToday;
+      } else if (dateFilterType === '3_DAYS') {
+        const limit = new Date();
+        limit.setDate(limit.getDate() - 3);
+        limit.setHours(0, 0, 0, 0);
+        matchesDate = itemDate >= limit;
+      } else if (dateFilterType === '7_DAYS') {
+        const limit = new Date();
+        limit.setDate(limit.getDate() - 7);
+        limit.setHours(0, 0, 0, 0);
+        matchesDate = itemDate >= limit;
+      } else if (dateFilterType === '15_DAYS') {
+        const limit = new Date();
+        limit.setDate(limit.getDate() - 15);
+        limit.setHours(0, 0, 0, 0);
+        matchesDate = itemDate >= limit;
+      } else if (dateFilterType === '30_DAYS') {
+        const limit = new Date();
+        limit.setDate(limit.getDate() - 30);
+        limit.setHours(0, 0, 0, 0);
+        matchesDate = itemDate >= limit;
+      } else if (dateFilterType === 'CUSTOM') {
+        if (customStartDate) {
+          const start = new Date(customStartDate + 'T00:00:00');
+          matchesDate = matchesDate && itemDate >= start;
+        }
+        if (customEndDate) {
+          const end = new Date(customEndDate + 'T23:59:59');
+          matchesDate = matchesDate && itemDate <= end;
+        }
+      }
+    }
+
+    return matchesSearch && matchesSpecialty && matchesDate;
+  });
+
+  const totalCases = statsFilteredConsultations.length;
+  const pendingCases = statsFilteredConsultations.filter(c => c.status === 'EM_ANDAMENTO').length;
+  const completedCases = statsFilteredConsultations.filter(c => c.status === 'CONCLUIDA').length;
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
   return (
@@ -945,10 +1044,8 @@ export function Dashboard() {
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-zinc-200/80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-md shadow-indigo-600/10">
-              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
+            <div className="w-9 h-9 flex items-center justify-center">
+              <img src={logoRentai} alt="ReNTAI Logo" className="w-8 h-8 object-contain" />
             </div>
             <div>
               <span className="font-bold text-lg text-zinc-950 tracking-tight">ReNTAI</span>
@@ -957,16 +1054,7 @@ export function Dashboard() {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
-              isDemoMode 
-                ? 'bg-amber-50 text-amber-700 border-amber-100' 
-                : 'bg-emerald-50 text-emerald-700 border-emerald-100'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${isDemoMode ? 'bg-amber-500' : 'bg-emerald-500'} animate-pulse`}></span>
-              {isDemoMode ? 'Modo de Demonstração' : 'Conectado'}
-            </div>
-
-            <div className="flex items-center gap-3 pl-4 border-l border-zinc-200">
+            <div className="flex items-center gap-3">
               <div ref={notificationsRef} className="relative">
                 <button 
                   onClick={handleToggleNotifications}
@@ -1110,7 +1198,7 @@ export function Dashboard() {
               </div>
             </div>
             <p className="text-3xl font-extrabold text-zinc-900">{totalCases}</p>
-            <p className="text-xs text-zinc-400 mt-1">Registrados na plataforma</p>
+            <p className="text-xs text-zinc-400 mt-1">Registrados {getDateSubtitleSuffix(dateFilterType)}</p>
           </div>
 
           <div className="bg-white border border-zinc-200/80 rounded-2xl p-5 shadow-sm">
@@ -1123,7 +1211,7 @@ export function Dashboard() {
               </div>
             </div>
             <p className="text-3xl font-extrabold text-amber-600">{pendingCases}</p>
-            <p className="text-xs text-zinc-400 mt-1">Casos pendentes de avaliação</p>
+            <p className="text-xs text-zinc-400 mt-1">Casos pendentes {dateFilterType === 'ALL' ? 'de avaliação' : getDateSubtitleSuffix(dateFilterType)}</p>
           </div>
 
           <div className="bg-white border border-zinc-200/80 rounded-2xl p-5 shadow-sm">
@@ -1136,7 +1224,7 @@ export function Dashboard() {
               </div>
             </div>
             <p className="text-3xl font-extrabold text-emerald-600">{completedCases}</p>
-            <p className="text-xs text-zinc-400 mt-1">Pareceres emitidos</p>
+            <p className="text-xs text-zinc-400 mt-1">Pareceres emitidos {dateFilterType === 'ALL' ? 'na plataforma' : getDateSubtitleSuffix(dateFilterType)}</p>
           </div>
         </div>
 
@@ -1259,7 +1347,27 @@ export function Dashboard() {
             <p className="text-sm font-medium text-zinc-400">Carregando dados das teleconsultas...</p>
           </div>
         ) : (
-          <div className="bg-white border border-zinc-200/80 rounded-2xl shadow-sm overflow-hidden">
+          <>
+            <div className="flex justify-between items-center px-1 mb-3">
+              <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                {filteredConsultations.length} {filteredConsultations.length === 1 ? 'solicitação encontrada' : 'solicitações encontradas'}
+              </span>
+              <button
+                onClick={handleToggleSort}
+                className="flex items-center gap-2 h-9 px-3 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 hover:border-zinc-300 transition-all duration-300 ease-in-out overflow-hidden shadow-sm active:scale-[0.95] focus:outline-none"
+                style={{ maxWidth: isSortExpanded ? '185px' : '38px' }}
+                title="Alternar ordenação (Mais Recentes / Mais Antigas)"
+              >
+                <svg className="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                <span className="text-xs font-bold text-zinc-600 whitespace-nowrap tracking-wide select-none">
+                  {sortOrder === 'desc' ? 'Mais Recentes' : 'Mais Antigas'}
+                </span>
+              </button>
+            </div>
+            
+            <div className="bg-white border border-zinc-200/80 rounded-2xl shadow-sm overflow-hidden">
             {filteredConsultations.length === 0 ? (
               <div className="p-16 text-center">
                 <div className="w-12 h-12 bg-zinc-50 border border-zinc-200/80 text-zinc-400 rounded-xl flex items-center justify-center mx-auto mb-4">
@@ -1276,7 +1384,7 @@ export function Dashboard() {
                   <div 
                     key={item.id} 
                     onClick={() => handleOpenDetails(item.id)}
-                    className="p-5 hover:bg-zinc-50/60 transition-colors duration-150 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer"
+                    className="group p-5 hover:bg-zinc-50/60 transition-colors duration-150 flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer"
                   >
                     <div className="space-y-1">
                       <div className="flex items-center gap-2.5">
@@ -1290,7 +1398,7 @@ export function Dashboard() {
                     </div>
 
                     <div className="flex items-center justify-between sm:justify-end gap-5">
-                      {item.ai_confidence_score != null && (
+                      {item.ai_confidence_score != null && item.status === 'CANCELADA' && (
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] font-semibold text-zinc-400">Score IA:</span>
                           <span className={`text-xs font-bold ${
@@ -1318,6 +1426,16 @@ export function Dashboard() {
                           {item.status}
                         </span>
 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDetails(item.id);
+                          }}
+                          className="px-3 py-1.5 bg-indigo-50/50 hover:bg-indigo-600 border border-indigo-100/55 hover:border-indigo-600 text-indigo-700 hover:text-white font-semibold text-xs rounded-xl transition-all duration-200 flex items-center gap-1 shadow-sm active:scale-[0.98] select-none"
+                        >
+                          Ver detalhes
+                        </button>
+
                         <svg className="w-4 h-4 text-zinc-400 group-hover:text-zinc-600 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
@@ -1328,8 +1446,9 @@ export function Dashboard() {
               </div>
             )}
           </div>
-        )}
-      </main>
+        </>
+      )}
+    </main>
 
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1872,7 +1991,7 @@ export function Dashboard() {
                               <button
                                 type="submit"
                                 disabled={submittingOpinion}
-                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98] disabled:opacity-50 flex items-center gap-1.5"
+                                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-xl shadow-sm hover:shadow-md transition-all duration-200 active:scale-[0.98] disabled:opacity-50 flex items-center gap-1.5"
                               >
                                 {submittingOpinion ? (
                                   <>
@@ -1880,17 +1999,22 @@ export function Dashboard() {
                                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                                     </svg>
-                                    <span>Enviando...</span>
+                                    <span>Registrando...</span>
                                   </>
                                 ) : (
-                                  <span>Enviar Parecer</span>
+                                  <>
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span>Registrar Parecer</span>
+                                  </>
                                 )}
                               </button>
                               <button
                                 type="button"
                                 disabled={submittingOpinion}
                                 onClick={() => setIsOpinionFormOpen(false)}
-                                className="px-4 py-2 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98]"
+                                className="px-4 py-2.5 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 text-xs font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 active:scale-[0.98]"
                               >
                                 Cancelar
                               </button>
