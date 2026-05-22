@@ -2,6 +2,19 @@
 
 Plataforma de teleconsultorias médicas que conecta profissionais de saúde a especialistas remotos, cobrindo o ciclo completo: solicitação, validação inteligente de documentos via IA, emissão de pareceres e acompanhamento em tempo real.
 
+---
+
+## 📌 Sumário
+* [1. Arquitetura da Solução e Stack](#1-arquitetura-da-solução-e-stack)
+* [2. Instruções de Execução](#2-instruções-de-execução)
+* [3. Configuração do Serviço e Substituição do Modelo](#3-configuração-do-serviço-e-substituição-do-modelo)
+* [4. Como testar o fluxo completo](#4-como-testar-o-fluxo-completo)
+* [5. Recursos que o projeto dispõe](#5-recursos-que-o-projeto-dispõe)
+* [6. Limitações Conhecidas e Versão de Produção](#6-limitações-conhecidas-e-versão-de-produção)
+* [7. Ferramentas de IA utilizadas](#7-ferramentas-de-ia-utilizadas)
+
+---
+
 ## 1. Arquitetura da Solução e Stack
 O sistema foi arquitetado para ser moderno, assíncrono e tipado de ponta a ponta. 
 
