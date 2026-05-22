@@ -89,7 +89,7 @@ A validação de documentos utiliza uma abordagem híbrida (OCR + pypdf) combina
 * **Para configurar a LLM:** Edite as variáveis no arquivo `.env` localizado na raiz do projeto:
   ```env
   OPENROUTER_API_KEY=sua_chave_aqui
-  OPENROUTER_MODEL=meta-llama/llama-3-8b-instruct:free
+  OPENROUTER_MODEL="z-ai/glm-4.5-air:free"
   OPENROUTER_URL=https://openrouter.ai/api/v1/chat/completions
   ```
 

@@ -11,7 +11,7 @@ logger = logging.getLogger("uvicorn.error")
 
 THRESHOLD = float(os.getenv("AI_VALIDATION_THRESHOLD", 0.75))
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-8b-instruct:free")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
 OPENROUTER_URL = os.getenv("OPENROUTER_URL", "")
 
 def extract_text_from_pdf(file_content: bytes) -> str:
