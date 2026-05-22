@@ -47,15 +47,28 @@ class Teleconsultation(Base):
     status: Mapped[TeleconsultationStatus] = mapped_column(String(50), default=TeleconsultationStatus.PENDENTE)
     ai_confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     specialist_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    
+    requester: Mapped["User"] = relationship("User", foreign_keys=[requester_id])
+    specialist: Mapped[User | None] = relationship("User", foreign_keys=[specialist_id])
     
     opinions: Mapped[list["Opinion"]] = relationship(cascade="all, delete-orphan")
     status_history: Mapped[list["StatusHistory"]] = relationship(cascade="all, delete-orphan")
     
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    @property
+    def document_name(self) -> str | None:
+        if not self.document_path:
+            return None
+        import os
+        basename = os.path.basename(self.document_path)
+        parts = basename.split("_", 1)
+        return parts[1] if len(parts) > 1 else basename
 
 class Opinion(Base):
     __tablename__ = "opinions"

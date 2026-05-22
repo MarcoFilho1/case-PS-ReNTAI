@@ -68,6 +68,10 @@ class TeleconsultationDetailOut(TeleconsultationOut):
     clinical_history: str
     requester_id: UUID
     specialist_id: Optional[UUID]
+    ai_summary: Optional[str] = None
+    document_name: Optional[str] = None
+    requester: Optional[UserOut] = None
+    specialist: Optional[UserOut] = None
     opinions: List[OpinionOut] = []
     status_history: List[StatusHistoryOut] = []
 
