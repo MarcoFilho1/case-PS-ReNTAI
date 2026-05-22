@@ -104,16 +104,29 @@ A validação realizada pela IA analisa minuciosamente se o documento submetido 
 2. Registre um usuário com o papel `SOLICITANTE` e faça login.
 3. No Dashboard, clique em "Nova Teleconsultoria", preencha o formulário clínico, anexe um arquivo e clique em "Confirmar e Analisar com IA".
 4. O frontend exibirá a tela de carregamento "Análise de IA ReNTAI" com um botão "Retornar ao menu". O backend registrará a consulta como `PENDENTE` e executará a validação da IA em segundo plano (*background task*).
-5. Se você aguardar na tela de carregamento, o frontend atualizará e fechará o modal automaticamente assim que o processamento terminar. Caso clique em "Retornar ao menu", você poderá ver o status da teleconsultoria atualizando de `PENDENTE` para `EM_ANDAMENTO` ou `CANCELADA` no painel principal (atualizado automaticamente via polling).
+5. Se você aguardar na tela de carregamento, o frontend atualizará e fechará o modal automaticamente assim que o processamento terminar. Caso clique em "Retornar ao menu", você poderá ver o status da teleconsultoria atualizando de `PENDENTE` para `EM_ANDAMENTO` ou `CANCELADA` no painel principal.
 6. Se o documento for validado com sucesso pela IA (score >= 0.85), o caso passará para `EM_ANDAMENTO`. Se for recusado (score < 0.85), passará para `CANCELADA` e você poderá clicar no caso para ler o motivo detalhado da rejeição emitido pela IA.
 7. Registre ou faça login com um usuário de papel `ESPECIALISTA`. Acesse os detalhes da teleconsultoria em status `EM_ANDAMENTO` e envie um parecer para alterá-la automaticamente para `CONCLUIDA`.
+8. **Sininho de Notificações:** Durante a sessão, as notificações (como aprovação/rejeição de IA ou parecer de especialista) se acumulam no sininho da barra superior em tempo real. Abrir o sininho zera a contagem e as notificações persistem localmente por usuário, expirando automaticamente após 7 dias.
 
-## 5. Limitações Conhecidas e Versão de Produção
+## 5. Recursos Avançados de UX e Notificações
+O sistema foi aprimorado com funcionalidades focadas na facilidade de uso médico:
+* **Visualização Web Inline de Documentos:** Permite visualizar arquivos em formato PDF e imagens clínicas diretamente no modal de detalhes da teleconsulta sem downloads automáticos obrigatórios.
+
+* **Sininho de Notificações Inteligente:** Painel acumulador de eventos recebidos em tempo real via WebSocket. Zera a contagem de não lidas ao abrir, fornece navegação imediata ao caso ao clicar e remove automaticamente registros com mais de 7 dias (limpeza baseada em idade de evento, persistida no `localStorage` sob chaves exclusivas de cada usuário logado).
+
+* **Exportação de Resumo em PDF:** Possibilita que médicos solicitantes façam o download de um relatório oficial em formato PDF do resumo de suas teleconsultas concluídas.O arquivo apresenta tabelas de metadados, caixas de destaque coloridas para a análise clínica, histórico, diagnóstico, resumo de IA e pareceres técnicos de especialistas.
+
+## 6. Limitações Conhecidas e Versão de Produção
 * **Armazenamento de Arquivos:** No MVP, os arquivos são salvos localmente (`/app/uploads`). Em produção, migraríamos para AWS S3 ou GCS.
 * **Migrações:** O SQLAlchemy usa `create_all` para facilitar testes. Em produção, usaria **Alembic**.
 * **Fila de Processamento:** O processamento de IA e OCR roda de forma assíncrona usando as `BackgroundTasks` nativas do FastAPI. Em um cenário de produção, substituiria essa fila em memória local por uma fila de mensageria utilizando Celery com Redis ou RabbitMQ.
+* **Validação de Cadastro de Médicos:** Em um ambiente de produção, o processo de criação de contas de médicos solicitantes e especialistas exigiria o envio de documentos profissionais (como CRM válido, comprovante de especialização e identificação) passando por uma etapa manual ou automatizada de validação regulatória antes da liberação do acesso. No escopo atual de testes e demonstração do MVP, essa validação regulatória foi abstraída para permitir o cadastro e simulação imediata de fluxos.
+* **Distribuição de consultas para especialistas:** No escopo do MVP, a associação entre a teleconsulta e o médico especialista é simplificada. Em um cenário de produção, seria implementado um algoritmo de balanceamento de carga de trabalho  para atribuir automaticamente o caso a um médico especialista qualificado e ativo na fila correspondente assim que o status mudasse para `EM_ANDAMENTO`.
 
-## 6. Ferramentas de IA utilizadas
+
+
+## 7. Ferramentas de IA utilizadas
 
 Neste projeto, adotei assistentes de inteligência artificial estritamente como ferramentas para aumento de produtividade e otimização de tempo. Todas as decisões de arquitetura, regras de negócio e validações de segurança foram concebidas por mim, utilizando as IAs sob orientação e constante revisão de código, em duas frentes:
 
