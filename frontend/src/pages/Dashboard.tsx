@@ -27,9 +27,12 @@ interface Teleconsultation {
   clinical_history: string;
   ai_confidence_score: number | null;
   ai_rejection_reason?: string | null;
+  ai_summary?: string | null;
   created_at: string;
   requester_id?: string;
   specialist_id?: string | null;
+  requester?: CurrentUser | null;
+  specialist?: CurrentUser | null;
   opinions?: Opinion[];
   status_history?: StatusHistory[];
 }
@@ -40,6 +43,14 @@ interface CurrentUser {
   email: string;
   role: string;
   specialty: string | null;
+}
+
+interface NotificationItem {
+  id: string;
+  message: string;
+  createdAt: string;
+  isRead: boolean;
+  caseId?: string;
 }
 
 const MOCK_DATA: Teleconsultation[] = [
@@ -120,9 +131,24 @@ export function Dashboard() {
 
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'info' | 'success' | 'warning' }[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const [isOpinionFormOpen, setIsOpinionFormOpen] = useState(false);
   const [opinionContent, setOpinionContent] = useState('');
   const [submittingOpinion, setSubmittingOpinion] = useState(false);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    patient_name: '',
+    patient_dob: '',
+    specialty: 'CARDIOLOGIA',
+    diagnostic_hypothesis: '',
+    clinical_history: '',
+  });
+  const [editUploadedFile, setEditUploadedFile] = useState<File | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const currentUserRef = useRef(currentUser);
   useEffect(() => {
@@ -142,8 +168,114 @@ export function Dashboard() {
     if (!isDetailsModalOpen) {
       setIsOpinionFormOpen(false);
       setOpinionContent('');
+      setIsEditing(false);
+      setEditUploadedFile(null);
+      setIsPreviewOpen(false);
     }
   }, [isDetailsModalOpen]);
+
+  const addNotification = (message: string, caseId?: string) => {
+    const currentU = currentUserRef.current;
+    if (!currentU) return;
+    const newNotification: NotificationItem = {
+      id: Math.random().toString(36).substring(2, 9),
+      message,
+      createdAt: new Date().toISOString(),
+      isRead: false,
+      caseId
+    };
+
+    setNotifications(prev => {
+      const storedKey = `rentai_notifications_${currentU.id}`;
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const active = prev.filter(item => new Date(item.createdAt).getTime() >= sevenDaysAgo);
+      const updated = [newNotification, ...active];
+      localStorage.setItem(storedKey, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleToggleNotifications = () => {
+    setIsNotificationsOpen(prev => {
+      const next = !prev;
+      if (next && currentUser) {
+        setNotifications(currentList => {
+          const updated = currentList.map(n => ({ ...n, isRead: true }));
+          localStorage.setItem(`rentai_notifications_${currentUser.id}`, JSON.stringify(updated));
+          return updated;
+        });
+      }
+      return next;
+    });
+  };
+
+  const handleClearAllNotifications = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    setNotifications([]);
+    localStorage.setItem(`rentai_notifications_${currentUser.id}`, JSON.stringify([]));
+  };
+
+  const handleNotificationClick = (caseId?: string) => {
+    if (!caseId) return;
+    handleOpenDetails(caseId);
+    setIsNotificationsOpen(false);
+  };
+
+  const formatNotificationTime = (dateStr: string) => {
+    try {
+      const now = new Date();
+      const date = new Date(dateStr);
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / (60 * 1000));
+      const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+      const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+      if (diffMins < 1) return 'Agora mesmo';
+      if (diffMins < 60) return `Há ${diffMins} min`;
+      if (diffHours < 24) return `Há ${diffHours} h`;
+      if (diffDays === 1) return 'Ontem';
+      return `Há ${diffDays} dias`;
+    } catch {
+      return dateStr;
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const storedKey = `rentai_notifications_${currentUser.id}`;
+    const stored = localStorage.getItem(storedKey);
+    if (stored) {
+      try {
+        const parsed: NotificationItem[] = JSON.parse(stored);
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const activeNotifications = parsed.filter(item => {
+          return new Date(item.createdAt).getTime() >= sevenDaysAgo;
+        });
+
+        setNotifications(activeNotifications);
+        
+        if (activeNotifications.length !== parsed.length) {
+          localStorage.setItem(storedKey, JSON.stringify(activeNotifications));
+        }
+      } catch (err) {
+        console.error("Erro ao carregar notificações do localStorage:", err);
+      }
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setIsNotificationsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   const fetchCurrentUser = async () => {
     try {
@@ -225,8 +357,11 @@ export function Dashboard() {
     const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     let socket: WebSocket;
     let reconnectTimeout: any;
+    let isClosed = false;
 
     const connectSocket = () => {
+      if (isClosed) return;
+
       const token = sessionStorage.getItem('token');
       if (!token) {
         // Se não houver token, aguarda 3 segundos e tenta novamente
@@ -238,10 +373,15 @@ export function Dashboard() {
       socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
+        if (isClosed) {
+          socket.close();
+          return;
+        }
         console.log('Conectado ao WebSocket de teleconsultas');
       };
 
       socket.onmessage = (event) => {
+        if (isClosed) return;
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'TELECONSULTATION_CREATED' || data.type === 'TELECONSULTATION_UPDATED') {
@@ -253,21 +393,41 @@ export function Dashboard() {
 
             const currentU = currentUserRef.current;
             if (currentU) {
+              let msg = '';
+              let type: 'info' | 'success' | 'warning' = 'info';
+
               if (data.type === 'TELECONSULTATION_UPDATED') {
                 if (currentU.role === 'ESPECIALISTA') {
                   if (data.specialty === currentU.specialty && data.status === 'EM_ANDAMENTO') {
-                    showToastRef.current?.(`Nova solicitação de ${formatSpecialty(data.specialty)} recebida para o paciente ${data.patient_name}.`, 'info');
+                    msg = `Nova solicitação de ${formatSpecialty(data.specialty)} recebida para o paciente ${data.patient_name}.`;
+                    type = 'info';
                   }
                 } else if (currentU.role === 'SOLICITANTE' && data.requester_id === currentU.id) {
                   if (data.status === 'CONCLUIDA') {
-                    showToastRef.current?.(`O parecer para o paciente ${data.patient_name} foi emitido com sucesso!`, 'success');
+                    msg = `O parecer para o paciente ${data.patient_name} foi emitido com sucesso!`;
+                    type = 'success';
                   } else if (data.status === 'CANCELADA') {
-                    showToastRef.current?.(`A solicitação para o paciente ${data.patient_name} foi rejeitada pela IA.`, 'warning');
+                    msg = `A solicitação para o paciente ${data.patient_name} foi rejeitada pela IA.`;
+                    type = 'warning';
                   } else if (data.status === 'EM_ANDAMENTO') {
-                    showToastRef.current?.(`A solicitação para o paciente ${data.patient_name} foi aprovada pela IA e está em andamento.`, 'success');
+                    msg = `A solicitação para o paciente ${data.patient_name} foi aprovada pela IA e está em andamento.`;
+                    type = 'success';
                   }
                 }
               }
+
+              if (msg) {
+                showToastRef.current?.(msg, type);
+                addNotification(msg, data.id);
+              }
+            }
+          } else if (data.type === 'TELECONSULTATION_DELETED') {
+            fetchConsultations(false);
+
+            if (detailsOpenRef.current && selectedCaseRef.current && selectedCaseRef.current.id === data.id) {
+              setIsDetailsModalOpen(false);
+              setSelectedCase(null);
+              showToastRef.current?.("Esta solicitação foi excluída.", "info");
             }
           }
         } catch (err) {
@@ -276,6 +436,7 @@ export function Dashboard() {
       };
 
       socket.onclose = (event) => {
+        if (isClosed) return;
         console.log('WebSocket desconectado. Tentando reconectar em 3 segundos...', event.reason);
         reconnectTimeout = setTimeout(() => {
           connectSocket();
@@ -291,6 +452,7 @@ export function Dashboard() {
     connectSocket();
 
     return () => {
+      isClosed = true;
       if (socket) socket.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
@@ -506,12 +668,221 @@ export function Dashboard() {
       setIsOpinionFormOpen(false);
       setOpinionContent('');
       showToastRef.current?.("Parecer registrado com sucesso!", "success");
+      if (isDemoMode) {
+        addNotification(`O parecer para o paciente ${selectedCase.patient_name} foi emitido com sucesso!`, selectedCase.id);
+      }
     } catch (err) {
       console.error("Erro ao enviar parecer:", err);
       alert("Houve um erro ao registrar seu parecer.");
     } finally {
       setSubmittingOpinion(false);
     }
+  };
+
+  const startEditing = () => {
+    if (!selectedCase) return;
+    setEditFormData({
+      patient_name: selectedCase.patient_name,
+      patient_dob: selectedCase.patient_dob,
+      specialty: selectedCase.specialty,
+      diagnostic_hypothesis: selectedCase.diagnostic_hypothesis,
+      clinical_history: selectedCase.clinical_history,
+    });
+    setEditUploadedFile(null);
+    setIsEditing(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCase) return;
+    setIsSavingEdit(true);
+
+    try {
+      if (isDemoMode) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const updatedCase: Teleconsultation = {
+          ...selectedCase,
+          patient_name: editFormData.patient_name,
+          patient_dob: editFormData.patient_dob,
+          specialty: editFormData.specialty,
+          diagnostic_hypothesis: editFormData.diagnostic_hypothesis,
+          clinical_history: editFormData.clinical_history,
+          status: 'PENDENTE',
+          ai_confidence_score: Number((0.65 + Math.random() * 0.33).toFixed(2)),
+          ai_summary: `[Resumo IA simulado para demonstração]: O paciente ${editFormData.patient_name} apresenta hipótese diagnóstica de ${editFormData.diagnostic_hypothesis}. Histórico clínico relata ${editFormData.clinical_history}.`
+        };
+
+        const newHistory: StatusHistory = {
+          id: Math.random().toString(36).substring(2, 9),
+          old_status: selectedCase.status,
+          new_status: 'PENDENTE',
+          changed_by: currentUser?.id || 'mock-solicitante-id',
+          created_at: new Date().toISOString()
+        };
+        updatedCase.status_history = [...(selectedCase.status_history || []), newHistory];
+
+        setTimeout(() => {
+          const finishedCase = {
+            ...updatedCase,
+            status: 'EM_ANDAMENTO',
+          };
+          const finishedHistory: StatusHistory = {
+            id: Math.random().toString(36).substring(2, 9),
+            old_status: 'PENDENTE',
+            new_status: 'EM_ANDAMENTO',
+            changed_by: 'system-ia',
+            created_at: new Date().toISOString()
+          };
+          finishedCase.status_history = [...(updatedCase.status_history || []), finishedHistory];
+          setConsultations(prev => {
+            const list = prev.map(c => c.id === selectedCase.id ? finishedCase : c);
+            localStorage.setItem('rentai_consultations', JSON.stringify(list));
+            return list;
+          });
+          if (selectedCaseRef.current?.id === selectedCase.id) {
+            setSelectedCase(finishedCase);
+          }
+          showToastRef.current?.(`A solicitação para o paciente ${editFormData.patient_name} foi validada com sucesso!`, 'success');
+          addNotification(`A solicitação para o paciente ${editFormData.patient_name} foi aprovada pela IA e está em andamento.`, selectedCase.id);
+        }, 3000);
+
+        const updatedList = consultations.map(c => c.id === selectedCase.id ? updatedCase : c);
+        setConsultations(updatedList);
+        localStorage.setItem('rentai_consultations', JSON.stringify(updatedList));
+        setSelectedCase(updatedCase);
+        setIsEditing(false);
+        setEditUploadedFile(null);
+        showToastRef.current?.("Solicitação atualizada com sucesso!", "success");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('patient_name', editFormData.patient_name);
+      formData.append('patient_dob', editFormData.patient_dob);
+      formData.append('specialty', editFormData.specialty);
+      formData.append('diagnostic_hypothesis', editFormData.diagnostic_hypothesis);
+      formData.append('clinical_history', editFormData.clinical_history);
+      if (editUploadedFile) {
+        formData.append('document', editUploadedFile);
+      }
+
+      const response = await api.put(`/teleconsultations/${selectedCase.id}`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      setSelectedCase(response.data);
+      setIsEditing(false);
+      setEditUploadedFile(null);
+      showToastRef.current?.("Solicitação atualizada com sucesso! A IA está reanalisando.", "success");
+
+      setConsultations(prev => prev.map(c => c.id === selectedCase.id ? { ...c, ...response.data } : c));
+
+      if (pollIntervalId) {
+        clearInterval(pollIntervalId);
+      }
+      const intervalId = pollCaseStatus(selectedCase.id);
+      setPollIntervalId(intervalId);
+
+    } catch (err: any) {
+      console.error("Erro ao salvar edição:", err);
+      alert(err.response?.data?.detail || "Houve um erro ao atualizar a teleconsultoria.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteCase = async () => {
+    if (!selectedCase) return;
+    const confirmMsg = `Você realmente deseja excluir a solicitação do paciente ${selectedCase.patient_name}?`;
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
+    try {
+      if (isDemoMode) {
+        const updated = consultations.filter(c => c.id !== selectedCase.id);
+        setConsultations(updated);
+        localStorage.setItem('rentai_consultations', JSON.stringify(updated));
+        showToastRef.current?.("Solicitação excluída com sucesso!", "success");
+        setIsDetailsModalOpen(false);
+        setSelectedCase(null);
+        return;
+      }
+
+      await api.delete(`/teleconsultations/${selectedCase.id}`);
+      showToastRef.current?.("Solicitação excluída com sucesso!", "success");
+      setIsDetailsModalOpen(false);
+      setSelectedCase(null);
+      fetchConsultations(false);
+    } catch (err: any) {
+      console.error("Erro ao excluir teleconsultoria:", err);
+      alert(err.response?.data?.detail || "Houve um erro ao excluir a teleconsultoria.");
+    }
+  };
+
+  const formatDateTime = (dateStr: string) => {
+    try {
+      const dateObj = new Date(dateStr);
+      return dateObj.toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getTimelineEventDescription = (hist: StatusHistory, requesterId?: string, specialistId?: string | null) => {
+    const status = hist.new_status;
+    const old = hist.old_status;
+
+    if (old === null && status === 'PENDENTE') {
+      return {
+        action: "Solicitação submetida para análise",
+        author: "Médico Solicitante"
+      };
+    }
+    if (old === 'PENDENTE' && status === 'EM_ANDAMENTO') {
+      return {
+        action: "Solicitação aprovada na validação de documentos",
+        author: "Sistema de IA ReNTAI"
+      };
+    }
+    if (old === 'PENDENTE' && status === 'CANCELADA') {
+      return {
+        action: "Solicitação recusada na validação de documentos",
+        author: "Sistema de IA ReNTAI"
+      };
+    }
+    if (status === 'CONCLUIDA') {
+      return {
+        action: "Parecer técnico emitido e teleconsulta concluída",
+        author: "Médico Especialista"
+      };
+    }
+    if (status === 'PENDENTE') {
+      return {
+        action: "Solicitação editada (re-submetida para análise de IA)",
+        author: "Médico Solicitante"
+      };
+    }
+
+    let author = "Sistema";
+    if (hist.changed_by === requesterId) {
+      author = "Médico Solicitante";
+    } else if (hist.changed_by === specialistId) {
+      author = "Médico Especialista";
+    }
+    return {
+      action: `Status alterado para ${status}`,
+      author
+    };
   };
 
   const filteredConsultations = consultations.filter(item => {
@@ -565,8 +936,9 @@ export function Dashboard() {
   });
 
   const totalCases = consultations.length;
-  const pendingCases = consultations.filter(c => c.status === 'PENDENTE').length;
+  const pendingCases = consultations.filter(c => c.status === 'EM_ANDAMENTO').length;
   const completedCases = consultations.filter(c => c.status === 'CONCLUIDA').length;
+  const unreadCount = notifications.filter(n => !n.isRead).length;
 
   return (
     <div className="min-h-screen bg-zinc-50/50 flex flex-col">
@@ -595,6 +967,96 @@ export function Dashboard() {
             </div>
 
             <div className="flex items-center gap-3 pl-4 border-l border-zinc-200">
+              <div ref={notificationsRef} className="relative">
+                <button 
+                  onClick={handleToggleNotifications}
+                  className={`p-2 rounded-xl text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all duration-200 relative focus:outline-none ${
+                    isNotificationsOpen ? 'text-indigo-600 bg-indigo-50/50' : ''
+                  }`}
+                  title="Notificações"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  {unreadCount > 0 && (
+                    <span className="absolute top-1.5 right-1.5 flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                    </span>
+                  )}
+                </button>
+
+                {isNotificationsOpen && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white border border-zinc-200 rounded-2xl shadow-xl z-50 overflow-hidden py-1 transform origin-top-right transition-all duration-200">
+                    <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-zinc-800">Notificações</span>
+                        {unreadCount > 0 && (
+                          <span className="px-1.5 py-0.5 bg-rose-50 text-[10px] font-medium text-rose-600 rounded-full">
+                            {unreadCount} nova{unreadCount > 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={handleClearAllNotifications}
+                          className="text-xs text-indigo-600 hover:text-indigo-700 font-medium transition-all duration-150"
+                        >
+                          Limpar tudo
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="max-h-96 overflow-y-auto divide-y divide-zinc-50">
+                      {notifications.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+                          <div className="w-10 h-10 rounded-full bg-zinc-50 flex items-center justify-center text-zinc-400 mb-2">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                          </div>
+                          <p className="text-xs font-medium text-zinc-500">Nenhuma notificação recente</p>
+                          <p className="text-[10px] text-zinc-400 mt-0.5">Notificações expiram após 7 dias</p>
+                        </div>
+                      ) : (
+                        notifications.map(item => {
+                          const isSuccess = item.message.includes('sucesso') || item.message.includes('aprovada');
+                          const isWarning = item.message.includes('rejeitada') || item.message.includes('excluída');
+                          
+                          return (
+                            <div 
+                              key={item.id}
+                              onClick={() => handleNotificationClick(item.caseId)}
+                              className={`px-4 py-3 hover:bg-zinc-50 transition-all duration-150 cursor-pointer flex gap-3 ${
+                                !item.isRead ? 'bg-indigo-50/15' : ''
+                              }`}
+                            >
+                              <div className="mt-1 flex-shrink-0">
+                                {isSuccess ? (
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 block"></span>
+                                ) : isWarning ? (
+                                  <span className="w-2 h-2 rounded-full bg-rose-500 block"></span>
+                                ) : (
+                                  <span className="w-2 h-2 rounded-full bg-indigo-500 block"></span>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-zinc-700 font-medium break-words leading-relaxed">
+                                  {item.message}
+                                </p>
+                                <span className="text-[10px] text-zinc-400 mt-1 block">
+                                  {formatNotificationTime(item.createdAt)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="hidden md:block text-right">
                 <p className="text-sm font-semibold text-zinc-800">{currentUser?.name || 'Carregando...'}</p>
                 <p className="text-xs text-zinc-400">
@@ -702,9 +1164,19 @@ export function Dashboard() {
                 className="w-full pl-3 pr-8 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs font-medium text-zinc-600 focus:outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none cursor-pointer"
               >
                 <option value="ALL">Todos Status</option>
-                <option value="PENDENTE">Pendente</option>
-                <option value="EM_ANDAMENTO">Em Andamento</option>
-                <option value="CONCLUIDA">Concluída</option>
+                {currentUser?.role === 'ESPECIALISTA' ? (
+                  <>
+                    <option value="EM_ANDAMENTO">Em Andamento</option>
+                    <option value="CONCLUIDA">Concluída</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="PENDENTE">Pendente</option>
+                    <option value="EM_ANDAMENTO">Em Andamento</option>
+                    <option value="CONCLUIDA">Concluída</option>
+                    <option value="CANCELADA">Cancelada</option>
+                  </>
+                )}
               </select>
               <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-zinc-400">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -713,25 +1185,27 @@ export function Dashboard() {
               </div>
             </div>
 
-            <div className="relative min-w-[160px]">
-              <select 
-                value={specialtyFilter}
-                onChange={e => setSpecialtyFilter(e.target.value)}
-                className="w-full pl-3 pr-8 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs font-medium text-zinc-600 focus:outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none cursor-pointer"
-              >
-                <option value="ALL">Todas Especialidades</option>
-                <option value="CARDIOLOGIA">Cardiologia</option>
-                <option value="CIRURGIA_ROBOTICA">Cirurgia Robótica</option>
-                <option value="ODONTOLOGIA">Odontologia</option>
-                <option value="DOENCAS_RARAS">Doenças Raras</option>
-                <option value="OXIGENOTERAPIA">Oxigenoterapia</option>
-              </select>
-              <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-zinc-400">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
+            {currentUser?.role !== 'ESPECIALISTA' && (
+              <div className="relative min-w-[160px]">
+                <select 
+                  value={specialtyFilter}
+                  onChange={e => setSpecialtyFilter(e.target.value)}
+                  className="w-full pl-3 pr-8 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs font-medium text-zinc-600 focus:outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none cursor-pointer"
+                >
+                  <option value="ALL">Todas Especialidades</option>
+                  <option value="CARDIOLOGIA">Cardiologia</option>
+                  <option value="CIRURGIA_ROBOTICA">Cirurgia Robótica</option>
+                  <option value="ODONTOLOGIA">Odontologia</option>
+                  <option value="DOENCAS_RARAS">Doenças Raras</option>
+                  <option value="OXIGENOTERAPIA">Oxigenoterapia</option>
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-zinc-400">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="relative min-w-[140px]">
               <select 
@@ -1039,182 +1513,551 @@ export function Dashboard() {
 
       {isDetailsModalOpen && selectedCase && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-zinc-950/20 backdrop-blur-sm" onClick={() => setIsDetailsModalOpen(false)}></div>
+          <div className="absolute inset-0 bg-zinc-950/20 backdrop-blur-sm" onClick={() => {
+            if (!isSavingEdit) {
+              setIsDetailsModalOpen(false);
+            }
+          }}></div>
           
-          <div className="relative w-full max-w-2xl bg-white border border-zinc-200 rounded-2xl shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] overflow-y-auto">
+          <div className="relative w-full max-w-5xl bg-white border border-zinc-200 rounded-2xl shadow-2xl p-6 sm:p-8 animate-fadeIn max-h-[90vh] overflow-y-auto">
             <button 
               onClick={() => setIsDetailsModalOpen(false)}
               className="absolute top-4 right-4 p-1 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100"
+              disabled={isSavingEdit}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
 
-            <div className="mb-6 space-y-2">
-              <span className="text-[10px] font-extrabold tracking-wider uppercase px-2.5 py-1 bg-zinc-100 text-zinc-600 rounded-full border border-zinc-200">
-                {formatSpecialty(selectedCase.specialty)}
-              </span>
-              <h2 className="text-2xl font-bold text-zinc-900">{selectedCase.patient_name}</h2>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                <span>Nascimento: {formatDate(selectedCase.patient_dob)} {calculateAge(selectedCase.patient_dob) && `(${calculateAge(selectedCase.patient_dob)} anos)`}</span>
-                <span>•</span>
-                <span>Caso ID: {selectedCase.id}</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-t border-zinc-100 pt-6">
-              
-              <div className="md:col-span-2 space-y-5">
-                <div>
-                  <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Hipótese Diagnóstica</h4>
-                  <p className="text-sm text-zinc-700 leading-relaxed bg-zinc-50 p-4 border border-zinc-100 rounded-xl">{selectedCase.diagnostic_hypothesis}</p>
+            {isEditing ? (
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-xl font-bold text-zinc-900">Editar Solicitação</h2>
+                  <button 
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 text-sm font-semibold"
+                  >
+                    Voltar
+                  </button>
                 </div>
 
                 <div>
-                  <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Histórico Clínico</h4>
-                  <p className="text-sm text-zinc-700 leading-relaxed bg-zinc-50 p-4 border border-zinc-100 rounded-xl">{selectedCase.clinical_history}</p>
+                  <label htmlFor="edit_pname" className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">
+                    Nome do Paciente
+                  </label>
+                  <input 
+                    id="edit_pname"
+                    type="text" 
+                    required
+                    placeholder="Nome completo do paciente"
+                    className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800"
+                    value={editFormData.patient_name}
+                    onChange={e => setEditFormData({...editFormData, patient_name: e.target.value})}
+                  />
                 </div>
 
-                {selectedCase.status === 'CANCELADA' && selectedCase.ai_rejection_reason && (
-                  <div className="w-full bg-rose-50 border border-rose-100 rounded-xl p-4 text-left animate-fadeIn">
-                    <span className="block text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1">Motivo da Rejeição (IA)</span>
-                    <p className="text-sm text-rose-700 leading-relaxed font-medium">{selectedCase.ai_rejection_reason}</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="edit_dob" className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">
+                      Data de Nascimento
+                    </label>
+                    <input 
+                      id="edit_dob"
+                      type="date" 
+                      required
+                      className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800"
+                      value={editFormData.patient_dob}
+                      onChange={e => setEditFormData({...editFormData, patient_dob: e.target.value})}
+                    />
                   </div>
-                )}
 
-                {selectedCase.opinions && selectedCase.opinions.length > 0 && (
-                  <div className="space-y-3 pt-2 border-t border-zinc-100">
-                    <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Pareceres Registrados</h4>
-                    <div className="space-y-3">
-                      {selectedCase.opinions.map((op) => (
-                        <div key={op.id} className="bg-emerald-50/40 border border-emerald-100/60 rounded-xl p-4 animate-fadeIn">
-                          <p className="text-[10px] text-zinc-400 mb-1 font-semibold uppercase">
-                            Emitido por Especialista em {formatDate(op.created_at)}
-                          </p>
-                          <p className="text-sm text-zinc-700 leading-relaxed whitespace-pre-wrap">{op.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {currentUser?.role === 'ESPECIALISTA' && selectedCase.status === 'EM_ANDAMENTO' && (
-                  <div className="border-t border-zinc-100 pt-4 space-y-4">
-                    {!isOpinionFormOpen ? (
-                      <button
-                        onClick={() => setIsOpinionFormOpen(true)}
-                        className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-xl shadow-sm hover:shadow-md transition-all duration-200 active:scale-[0.98] flex items-center gap-1.5"
+                  <div>
+                    <label htmlFor="edit_spec" className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">
+                      Especialidade
+                    </label>
+                    <div className="relative">
+                      <select 
+                        id="edit_spec"
+                        className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 appearance-none text-zinc-800"
+                        value={editFormData.specialty}
+                        onChange={e => setEditFormData({...editFormData, specialty: e.target.value})}
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        <option value="CARDIOLOGIA">Cardiologia</option>
+                        <option value="CIRURGIA_ROBOTICA">Cirurgia Robótica</option>
+                        <option value="ODONTOLOGIA">Odontologia</option>
+                        <option value="DOENCAS_RARAS">Doenças Raras</option>
+                        <option value="OXIGENOTERAPIA">Oxigenoterapia</option>
+                      </select>
+                      <div className="absolute inset-y-0 right-0 flex items-center px-3.5 pointer-events-none text-zinc-400">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                         </svg>
-                        <span>Registrar Parecer</span>
-                      </button>
-                    ) : (
-                      <form onSubmit={handleOpinionSubmit} className="space-y-3 animate-fadeIn">
-                        <label htmlFor="opinionText" className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-                          Seu Parecer Técnico
-                        </label>
-                        <textarea
-                          id="opinionText"
-                          required
-                          rows={4}
-                          value={opinionContent}
-                          onChange={e => setOpinionContent(e.target.value)}
-                          placeholder="Digite aqui o seu parecer clínico detalhado e recomendações..."
-                          className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800 resize-y"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="submit"
-                            disabled={submittingOpinion}
-                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98] disabled:opacity-50 flex items-center gap-1.5"
-                          >
-                            {submittingOpinion ? (
-                              <>
-                                <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                </svg>
-                                <span>Enviando...</span>
-                              </>
-                            ) : (
-                              <span>Enviar Parecer</span>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={submittingOpinion}
-                            onClick={() => setIsOpinionFormOpen(false)}
-                            className="px-4 py-2 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98]"
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </form>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-col items-center md:items-stretch gap-6 border-t md:border-t-0 md:border-l border-zinc-100 pt-6 md:pt-0 md:pl-6">
-                
-                <div className="w-full text-center md:text-left bg-zinc-50 border border-zinc-100 rounded-xl p-4">
-                  <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Status Atual</span>
-                  <span className={`inline-flex px-3 py-1 text-xs font-extrabold tracking-wider rounded-full border uppercase ${
-                    selectedCase.status === 'PENDENTE' 
-                      ? 'bg-amber-50 text-amber-700 border-amber-200/50' 
-                      : selectedCase.status === 'CONCLUIDA' 
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200/50' 
-                        : selectedCase.status === 'EM_ANDAMENTO'
-                          ? 'bg-indigo-50 text-indigo-700 border-indigo-200/50'
-                          : 'bg-zinc-100 text-zinc-600 border-zinc-200'
-                  }`}>
-                    {selectedCase.status}
-                  </span>
-                </div>
-
-                {selectedCase.ai_confidence_score != null && (
-                  <div className="w-full bg-zinc-50 border border-zinc-100 rounded-xl p-4 flex flex-col items-center">
-                    <span className="w-full block text-left text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Conformidade IA</span>
-                    
-                    <div className="relative flex items-center justify-center w-24 h-24">
-                      <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                        <path
-                          className="text-zinc-200"
-                          strokeWidth="2.5"
-                          stroke="currentColor"
-                          fill="none"
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                        />
-                        <path
-                          className={`${
-                            selectedCase.ai_confidence_score >= 0.8 
-                              ? 'text-emerald-500' 
-                              : selectedCase.ai_confidence_score >= 0.6 
-                                ? 'text-amber-500' 
-                                : 'text-rose-500'
-                          } transition-all duration-500`}
-                          strokeDasharray={`${selectedCase.ai_confidence_score * 100}, 100`}
-                          strokeWidth="3"
-                          strokeLinecap="round"
-                          stroke="currentColor"
-                          fill="none"
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                        />
-                      </svg>
-                      <div className="absolute text-center">
-                        <span className="text-xl font-extrabold text-zinc-800">{Math.round(selectedCase.ai_confidence_score * 100)}%</span>
                       </div>
                     </div>
-                    
-                    <p className="text-[10px] text-zinc-400 mt-2 text-center">Nível de segurança documental extraído pela IA.</p>
                   </div>
-                )}
-              </div>
+                </div>
 
-            </div>
+                <div>
+                  <label htmlFor="edit_hypoth" className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">
+                    Hipótese Diagnóstica
+                  </label>
+                  <textarea 
+                    id="edit_hypoth"
+                    required
+                    rows={3}
+                    placeholder="Descrição clara das suspeitas clínicas principais..."
+                    className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800 resize-y"
+                    value={editFormData.diagnostic_hypothesis}
+                    onChange={e => setEditFormData({...editFormData, diagnostic_hypothesis: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="edit_history" className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">
+                    Histórico Clínico do Paciente
+                  </label>
+                  <textarea 
+                    id="edit_history"
+                    required
+                    rows={4}
+                    placeholder="Histórico, doenças pré-existentes, sintomas atuais e exames preliminares..."
+                    className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800 resize-y"
+                    value={editFormData.clinical_history}
+                    onChange={e => setEditFormData({...editFormData, clinical_history: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5 uppercase tracking-wider">
+                    Substituir Anexo Clínico (Opcional)
+                  </label>
+                  <div className="border-2 border-dashed border-zinc-200 rounded-xl p-4 text-center hover:bg-zinc-50 transition-colors duration-150 relative cursor-pointer group">
+                    <input 
+                      type="file" 
+                      accept=".pdf,.png,.jpg,.jpeg"
+                      onChange={e => e.target.files && setEditUploadedFile(e.target.files[0])}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="p-1.5 bg-zinc-100 text-zinc-500 rounded-lg group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-colors">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                      </div>
+                      {editUploadedFile ? (
+                        <div className="text-xs">
+                          <span className="font-semibold text-indigo-600">{editUploadedFile.name}</span>
+                          <span className="text-zinc-400 ml-1.5">({(editUploadedFile.size / 1024).toFixed(0)} KB)</span>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-xs font-semibold text-zinc-700">Clique ou arraste um PDF ou Imagem para substituir</p>
+                          <p className="text-[10px] text-zinc-400">Deixe em branco para manter o documento atual</p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button 
+                    type="submit" 
+                    disabled={isSavingEdit}
+                    className="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-xl shadow-sm hover:shadow-md transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-600/20 active:scale-[0.99] flex items-center justify-center gap-2"
+                  >
+                    {isSavingEdit ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <span>Confirmar e Salvar Alterações</span>
+                    )}
+                  </button>
+                  <button 
+                    type="button" 
+                    disabled={isSavingEdit}
+                    onClick={() => setIsEditing(false)}
+                    className="px-4 py-3 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 text-sm font-semibold rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98]"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="mb-6 space-y-2">
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <span className="text-[10px] font-extrabold tracking-wider uppercase px-2.5 py-1 bg-zinc-100 text-zinc-600 rounded-full border border-zinc-200">
+                        {formatSpecialty(selectedCase.specialty)}
+                      </span>
+                      <h2 className="text-2xl font-bold text-zinc-900 mt-2">{selectedCase.patient_name}</h2>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500 mt-1">
+                        <span>Nascimento: {formatDate(selectedCase.patient_dob)} {calculateAge(selectedCase.patient_dob) && `(${calculateAge(selectedCase.patient_dob)} anos)`}</span>
+                        <span>•</span>
+                        <span>Caso ID: {selectedCase.id}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-t border-zinc-100 pt-6">
+                  
+                  <div className="md:col-span-2 space-y-5">
+                    
+                    {/* AI SUMMARY BLOCK */}
+                    <div className="bg-indigo-50/50 border border-indigo-100/80 rounded-2xl p-5 shadow-sm space-y-3">
+                      <div className="flex items-center gap-2 text-indigo-600">
+                        <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        <span className="text-xs font-bold uppercase tracking-wider">Resumo Clínico por IA</span>
+                      </div>
+                      {selectedCase.status === 'PENDENTE' ? (
+                        <div className="space-y-2 animate-pulse py-1">
+                          <div className="h-3 bg-indigo-100 rounded w-11/12"></div>
+                          <div className="h-3 bg-indigo-100 rounded w-full"></div>
+                          <div className="h-3 bg-indigo-100 rounded w-9/12"></div>
+                        </div>
+                      ) : selectedCase.ai_summary ? (
+                        <p className="text-sm text-zinc-700 leading-relaxed whitespace-pre-wrap">{selectedCase.ai_summary}</p>
+                      ) : (
+                        <p className="text-sm text-zinc-400 italic">Resumo indisponível ou em processamento.</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Hipótese Diagnóstica</h4>
+                      <p className="text-sm text-zinc-700 leading-relaxed bg-zinc-50 p-4 border border-zinc-100 rounded-xl whitespace-pre-wrap">{selectedCase.diagnostic_hypothesis}</p>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Histórico Clínico</h4>
+                      <p className="text-sm text-zinc-700 leading-relaxed bg-zinc-50 p-4 border border-zinc-100 rounded-xl whitespace-pre-wrap">{selectedCase.clinical_history}</p>
+                    </div>
+
+                    {/* CLINICAL ATTACHMENT VIEW/DOWNLOAD */}
+                    {!isDemoMode && selectedCase.id && (
+                      <div className="border-t border-zinc-100 pt-4 space-y-3">
+                        <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Documento Submetido</h4>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsPreviewOpen(!isPreviewOpen)}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded-xl text-xs font-semibold transition-all shadow-sm active:scale-[0.98]"
+                          >
+                            {isPreviewOpen ? (
+                              <>
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858-.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                                </svg>
+                                <span>Ocultar Visualização</span>
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                                <span>Visualizar Anexo Clínico</span>
+                              </>
+                            )}
+                          </button>
+                          
+                          <a
+                            href={`${api.defaults.baseURL}/teleconsultations/${selectedCase.id}/document?token=${sessionStorage.getItem('token') || ''}&download=true`}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-zinc-50 hover:bg-zinc-100 text-zinc-700 border border-zinc-200 rounded-xl text-xs font-semibold transition-all shadow-sm active:scale-[0.98]"
+                            download
+                          >
+                            <svg className="w-4 h-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            <span>Baixar Documento</span>
+                          </a>
+                        </div>
+
+                        {isPreviewOpen && (
+                          <div className="mt-4 border border-zinc-200 rounded-2xl overflow-hidden bg-zinc-100 p-2 animate-fadeIn relative">
+                            {selectedCase.document_name && (
+                              <div className="bg-white px-3 py-1.5 border-b border-zinc-200 text-zinc-500 text-[10px] font-semibold flex justify-between items-center rounded-t-xl mb-2">
+                                <span className="truncate max-w-[80%]">{selectedCase.document_name}</span>
+                                <span className="uppercase text-[9px] bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-600 font-bold">
+                                  {selectedCase.document_name.split('.').pop()}
+                                </span>
+                              </div>
+                            )}
+                            
+                            {selectedCase.document_name?.toLowerCase().endsWith('.pdf') ? (
+                              <iframe
+                                src={`${api.defaults.baseURL}/teleconsultations/${selectedCase.id}/document?token=${sessionStorage.getItem('token') || ''}`}
+                                className="w-full h-[500px] border-0 rounded-xl bg-white"
+                                title="Visualização do Documento PDF"
+                              />
+                            ) : selectedCase.document_name?.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/) ? (
+                              <div className="flex justify-center bg-white p-4 rounded-xl border border-zinc-200/50">
+                                <img
+                                  src={`${api.defaults.baseURL}/teleconsultations/${selectedCase.id}/document?token=${sessionStorage.getItem('token') || ''}`}
+                                  alt="Documento Clínico"
+                                  className="max-w-full max-h-[500px] rounded-lg object-contain"
+                                />
+                              </div>
+                            ) : (
+                              <iframe
+                                src={`${api.defaults.baseURL}/teleconsultations/${selectedCase.id}/document?token=${sessionStorage.getItem('token') || ''}`}
+                                className="w-full h-[500px] border-0 rounded-xl bg-white"
+                                title="Visualização do Documento"
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedCase.status === 'CANCELADA' && selectedCase.ai_rejection_reason && (
+                      <div className="w-full bg-rose-50 border border-rose-100 rounded-xl p-4 text-left animate-fadeIn">
+                        <span className="block text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1">Motivo da Rejeição (IA)</span>
+                        <p className="text-sm text-rose-700 leading-relaxed font-medium">{selectedCase.ai_rejection_reason}</p>
+                      </div>
+                    )}
+
+                    {selectedCase.opinions && selectedCase.opinions.length > 0 && (
+                      <div className="space-y-3 pt-2 border-t border-zinc-100">
+                        <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Pareceres Registrados</h4>
+                        <div className="space-y-3">
+                          {selectedCase.opinions.map((op) => (
+                            <div key={op.id} className="bg-emerald-50/40 border border-emerald-100/60 rounded-xl p-4 animate-fadeIn">
+                              <p className="text-[10px] text-zinc-400 mb-1 font-semibold uppercase">
+                                Emitido por Especialista em {formatDate(op.created_at)}
+                              </p>
+                              <p className="text-sm text-zinc-700 leading-relaxed whitespace-pre-wrap">{op.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {currentUser?.role === 'ESPECIALISTA' && selectedCase.status === 'EM_ANDAMENTO' && (
+                      <div className="border-t border-zinc-100 pt-4 space-y-4">
+                        {!isOpinionFormOpen ? (
+                          <button
+                            onClick={() => setIsOpinionFormOpen(true)}
+                            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-xl shadow-sm hover:shadow-md transition-all duration-200 active:scale-[0.98] flex items-center gap-1.5"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            <span>Registrar Parecer</span>
+                          </button>
+                        ) : (
+                          <form onSubmit={handleOpinionSubmit} className="space-y-3 animate-fadeIn">
+                            <label htmlFor="opinionText" className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                              Seu Parecer Técnico
+                            </label>
+                            <textarea
+                              id="opinionText"
+                              required
+                              rows={4}
+                              value={opinionContent}
+                              onChange={e => setOpinionContent(e.target.value)}
+                              placeholder="Digite aqui o seu parecer clínico detalhado e recomendações..."
+                              className="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm placeholder-zinc-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-600/5 transition-all duration-200 text-zinc-800 resize-y"
+                            />
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="submit"
+                                disabled={submittingOpinion}
+                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98] disabled:opacity-50 flex items-center gap-1.5"
+                              >
+                                {submittingOpinion ? (
+                                  <>
+                                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                    </svg>
+                                    <span>Enviando...</span>
+                                  </>
+                                ) : (
+                                  <span>Enviar Parecer</span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={submittingOpinion}
+                                onClick={() => setIsOpinionFormOpen(false)}
+                                className="px-4 py-2 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 active:scale-[0.98]"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </form>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col items-center md:items-stretch gap-6 border-t md:border-t-0 md:border-l border-zinc-100 pt-6 md:pt-0 md:pl-6">
+                    
+                    <div className="w-full text-center md:text-left bg-zinc-50 border border-zinc-100 rounded-xl p-4">
+                      <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Status Atual</span>
+                      <span className={`inline-flex px-3 py-1 text-xs font-extrabold tracking-wider rounded-full border uppercase ${
+                        selectedCase.status === 'PENDENTE' 
+                          ? 'bg-amber-50 text-amber-700 border-amber-200/50' 
+                          : selectedCase.status === 'CONCLUIDA' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200/50' 
+                            : selectedCase.status === 'EM_ANDAMENTO'
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200/50'
+                              : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                      }`}>
+                        {selectedCase.status}
+                      </span>
+                    </div>
+
+                    {/* ACTIONS: EDIT / DELETE (Only for the soliciting doctor and when not concluded) */}
+                    {currentUser?.role === 'SOLICITANTE' && selectedCase.requester_id === currentUser.id && (
+                      <div className="w-full bg-zinc-50 border border-zinc-100 rounded-xl p-4 space-y-3">
+                        <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Ações da Solicitação</span>
+                        <div className="flex flex-col gap-2">
+                          {selectedCase.status !== 'CONCLUIDA' && (
+                            <button
+                              onClick={startEditing}
+                              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-sm hover:shadow transition-all duration-200 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                              <span>Editar Solicitação</span>
+                            </button>
+                          )}
+                          {selectedCase.status === 'CONCLUIDA' && (
+                            <a
+                              href={`${api.defaults.baseURL}/teleconsultations/${selectedCase.id}/pdf?token=${sessionStorage.getItem('token') || ''}`}
+                              download={`resumo_teleconsulta_${selectedCase.id}.pdf`}
+                              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm hover:shadow transition-all duration-200 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-emerald-600/20"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              <span>Exportar Resumo (PDF)</span>
+                            </a>
+                          )}
+                          <button
+                            onClick={handleDeleteCase}
+                            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white border border-rose-200 hover:bg-rose-50 text-rose-600 hover:text-rose-700 font-semibold text-xs rounded-xl shadow-sm hover:shadow transition-all duration-200 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-rose-600/10"
+                          >
+                            <svg className="w-4 h-4 text-rose-500 hover:text-rose-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            <span>Excluir Solicitação</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedCase.ai_confidence_score != null && (
+                      <div className="w-full bg-zinc-50 border border-zinc-100 rounded-xl p-4 flex flex-col items-center">
+                        <span className="w-full block text-left text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Conformidade IA</span>
+                        
+                        <div className="relative flex items-center justify-center w-24 h-24">
+                          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                            <path
+                              className="text-zinc-200"
+                              strokeWidth="2.5"
+                              stroke="currentColor"
+                              fill="none"
+                              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                            <path
+                              className={`${
+                                selectedCase.ai_confidence_score >= 0.8 
+                                  ? 'text-emerald-500' 
+                                  : selectedCase.ai_confidence_score >= 0.6 
+                                    ? 'text-amber-500' 
+                                    : 'text-rose-500'
+                              } transition-all duration-500`}
+                              strokeDasharray={`${selectedCase.ai_confidence_score * 100}, 100`}
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              stroke="currentColor"
+                              fill="none"
+                              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                          </svg>
+                          <div className="absolute text-center">
+                            <span className="text-xl font-extrabold text-zinc-800">{Math.round(selectedCase.ai_confidence_score * 100)}%</span>
+                          </div>
+                        </div>
+                        
+                        <p className="text-[10px] text-zinc-400 mt-2 text-center">Nível de segurança documental extraído pela IA.</p>
+                      </div>
+                    )}
+
+                    {/* RESPONSIBLE DOCTORS BLOCK */}
+                    <div className="w-full bg-zinc-50 border border-zinc-100 rounded-xl p-4 space-y-3">
+                      <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Profissionais Envolvidos</span>
+                      
+                      <div className="space-y-2.5 text-left">
+                        <div>
+                          <span className="block text-[9px] font-bold text-zinc-400 uppercase">Médico Solicitante</span>
+                          <p className="text-xs font-semibold text-zinc-800">{selectedCase.requester?.name || 'Médico Solicitante'}</p>
+                          <p className="text-[10px] text-zinc-500">{selectedCase.requester?.email || 'solicitante@rentai.com'}</p>
+                        </div>
+                        
+                        <div className="border-t border-zinc-200/60 pt-2.5">
+                          <span className="block text-[9px] font-bold text-zinc-400 uppercase">Médico Especialista</span>
+                          {selectedCase.specialist ? (
+                            <div>
+                              <p className="text-xs font-semibold text-zinc-800">{selectedCase.specialist.name}</p>
+                              <p className="text-[10px] text-zinc-500">{selectedCase.specialist.email}</p>
+                              <span className="inline-block mt-1 text-[9px] font-bold bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded uppercase">
+                                {formatSpecialty(selectedCase.specialist.specialty || '')}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-zinc-400 italic">Aguardando parecer de especialista...</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* STATUS HISTORY TIMELINE */}
+                    <div className="w-full bg-zinc-50 border border-zinc-100 rounded-xl p-4 space-y-3">
+                      <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Linha do Tempo</span>
+                      
+                      <div className="relative border-l border-zinc-200 pl-4 ml-1.5 space-y-4">
+                        {selectedCase.status_history && selectedCase.status_history.length > 0 ? (
+                          selectedCase.status_history.slice().reverse().map((hist, idx) => {
+                            const desc = getTimelineEventDescription(hist, selectedCase.requester_id, selectedCase.specialist_id);
+                            return (
+                              <div key={hist.id || idx} className="relative">
+                                {/* Timeline dot */}
+                                <span className="absolute -left-[22px] top-1 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-white border-2 border-indigo-600">
+                                  <span className="h-1 w-1 rounded-full bg-indigo-600"></span>
+                                </span>
+                                <div className="space-y-0.5 text-left">
+                                  <p className="text-[11px] font-bold text-zinc-800 leading-tight">{desc.action}</p>
+                                  <p className="text-[10px] text-zinc-500 leading-none">{desc.author}</p>
+                                  <p className="text-[9px] text-zinc-400 font-medium">{formatDateTime(hist.created_at)}</p>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <p className="text-[10px] text-zinc-400 italic">Nenhum histórico de status registrado.</p>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
